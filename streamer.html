@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Streamer</title>
+</head>
+<body>
+<h1>Streamer</h1>
+<video id="preview" autoplay muted></video>
+<script>
+  document.addEventListener("DOMContentLoaded", function() {
+      const video = document.getElementById('preview');
+      let ws;  // WebSocket variable defined globally for reconnection
+      let mediaRecorder;
+
+      function connectWebSocket() {
+          ws = new WebSocket('ws://localhost:8080/stream');
+
+          ws.onopen = () => console.log('WebSocket connection opened');
+          ws.onclose = () => {
+              console.log('WebSocket connection closed. Attempting to reconnect...');
+          };
+          ws.onerror = (error) => console.error('WebSocket error:', error);
+      }
+
+      console.log('Requesting access to media devices...');
+      navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+          .then(stream => {
+              console.log('Access granted to media devices.');
+              video.srcObject = stream;
+
+              mediaRecorder = new MediaRecorder(stream, {
+                  mimeType: 'video/webm; codecs=vp9,opus'
+              });
+              console.log('MediaRecorder created with mimeType video/webm; codecs=vp9,opus');
+
+              mediaRecorder.ondataavailable = function (e) {
+                  console.log('MediaRecorder data available:', e.data.size, 'bytes');
+                  if (e.data.size > 0 && ws.readyState === WebSocket.OPEN) {
+                      e.data.arrayBuffer().then(buffer => {
+                          console.log('Sending data to server, size:', buffer.byteLength);
+                          ws.send(buffer); // Send as binary data to the server
+                      }).catch(err => console.error('Error converting Blob to ArrayBuffer:', err));
+                  } else if (ws.readyState !== WebSocket.OPEN) {
+                      console.warn('WebSocket is not open. ReadyState:', ws.readyState);
+                  }
+              };
+
+              mediaRecorder.onstart = () => console.log('MediaRecorder started recording');
+              mediaRecorder.onstop = () => console.log('MediaRecorder stopped recording');
+              mediaRecorder.onerror = (error) => console.error('MediaRecorder error:', error);
+
+              mediaRecorder.start(500); // Send data every 100ms
+              console.log('MediaRecorder started with 100ms interval');
+              connectWebSocket(); // Initialize WebSocket connection
+          })
+          .catch(err => {
+              console.error('Error accessing media devices.', err);
+          });
+  });
+</script>
+</body>
+</html>

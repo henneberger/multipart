@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Viewer</title>
+</head>
+<body>
+<h1>Viewer</h1>
+<video id="player" controls autoplay></video>
+<script>
+  const video = document.getElementById('player');
+  const mediaSource = new MediaSource();
+  video.src = URL.createObjectURL(mediaSource);
+
+  const ws = new WebSocket('ws://localhost:8080/watch?bitrate=low');
+  ws.binaryType = 'arraybuffer';
+
+  let sourceBuffer;
+  let streamInitialized = false;
+  const preamble = new Uint8Array([
+0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01, 0x42, 0xF7, 0x81, 0x01, 0x42, 0xF2, 0x81,
+0x04, 0x42, 0xF3, 0x81, 0x08, 0x42, 0x82, 0x84, 0x77, 0x65, 0x62, 0x6D, 0x42, 0x87, 0x81, 0x04,
+0x42, 0x85, 0x81, 0x02, 0x18, 0x53, 0x80, 0x67, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+0x15, 0x49, 0xA9, 0x66, 0x99, 0x2A, 0xD7, 0xB1, 0x83, 0x0F, 0x42, 0x40, 0x4D, 0x80, 0x86, 0x43,
+0x68, 0x72, 0x6F, 0x6D, 0x65, 0x57, 0x41, 0x86, 0x43, 0x68, 0x72, 0x6F, 0x6D, 0x65, 0x16, 0x54,
+0xAE, 0x6B, 0xEA, 0xAE, 0xBD, 0xD7, 0x81, 0x01, 0x73, 0xC5, 0x87, 0x8F, 0x4E, 0x0C, 0xCF, 0x0A,
+0x26, 0x0F, 0x83, 0x81, 0x02, 0x86, 0x86, 0x41, 0x5F, 0x4F, 0x50, 0x55, 0x53, 0x63, 0xA2, 0x93,
+0x4F, 0x70, 0x75, 0x73, 0x48, 0x65, 0x61, 0x64, 0x01, 0x01, 0x00, 0x00, 0x80, 0xBB, 0x00, 0x00,
+0x00, 0x00, 0x00, 0xE1, 0x8D, 0xB5, 0x84, 0x47, 0x3B, 0x80, 0x00, 0x9F, 0x81, 0x01, 0x62, 0x64,
+0x81, 0x20, 0xAE, 0xA9, 0xD7, 0x81, 0x02, 0x73, 0xC5, 0x87, 0xC2, 0xCE, 0x1C, 0xCE, 0x81, 0xF1,
+0x72, 0x83, 0x81, 0x01, 0x55, 0xEE, 0x81, 0x01, 0x86, 0x85, 0x56, 0x5F, 0x56, 0x50, 0x39, 0xE0,
+0x8C, 0xB0, 0x82, 0x02, 0x80, 0xBA, 0x82, 0x01, 0xE0, 0x53, 0xC0, 0x81, 0x01
+]);
+
+  const marker = new Uint8Array([0x1F, 0x43, 0xB6, 0x75]);
+
+  mediaSource.addEventListener('sourceopen', () => {
+    try {
+      sourceBuffer = mediaSource.addSourceBuffer('video/webm; codecs="vp9, opus"');
+      sourceBuffer.mode = 'sequence'; // Use 'sequence' mode for live streaming
+
+      // First, append the preamble to the source buffer
+      if (!sourceBuffer.updating) {
+        sourceBuffer.appendBuffer(preamble);
+      } else {
+        sourceBuffer.addEventListener('updateend', function appendPreamble() {
+          sourceBuffer.removeEventListener('updateend', appendPreamble);
+          sourceBuffer.appendBuffer(preamble);
+        });
+      }
+
+      ws.onmessage = function(event) {
+        const data = new Uint8Array(event.data);
+
+        if (!streamInitialized) {
+          // Search for the marker to initialize the stream
+          let markerIndex = -1;
+          for (let i = 0; i <= data.length - marker.length; i++) {
+            if (data.subarray(i, i + marker.length).every((val, index) => val === marker[index])) {
+              markerIndex = i;
+              break;
+            }
+          }
+
+          if (markerIndex !== -1) {
+            // Found the marker, initialize the stream and append data starting from the marker
+            streamInitialized = true;
+            const streamData = data.subarray(markerIndex);
+            appendData(streamData);
+          }
+        } else {
+          // Stream already initialized, append all data
+          appendData(data);
+        }
+      };
+    } catch (e) {
+      console.error('Error adding SourceBuffer:', e);
+    }
+  });
+
+  function appendData(data) {
+    if (!sourceBuffer.updating) {
+      sourceBuffer.appendBuffer(data);
+    } else {
+      sourceBuffer.addEventListener('updateend', function appendNext() {
+        sourceBuffer.removeEventListener('updateend', appendNext);
+        sourceBuffer.appendBuffer(data);
+      });
+    }
+  }
+
+  ws.onerror = function(error) {
+    console.error('WebSocket error:', error);
+  };
+
+  ws.onclose = function(event) {
+    console.warn('WebSocket connection closed:', event.reason);
+    if (mediaSource.readyState === 'open') {
+      mediaSource.endOfStream();
+    }
+  };
+
+  // Optional: Add event listeners for debugging
+  video.addEventListener('error', (e) => {
+    const error = video.error;
+    if (error) {
+      console.error('Video element error:', error.message, 'Code:', error.code);
+    } else {
+      console.error('Video element error event:', e);
+    }
+  });
+</script>
+</body>
+</html>
